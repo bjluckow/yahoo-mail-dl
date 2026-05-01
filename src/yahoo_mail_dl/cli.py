@@ -84,17 +84,12 @@ def main(argv: list[str] | None = None) -> int:
         description="Bulk download email from Yahoo Mail / AOL via IMAP.",
     )
     parser.add_argument(
-        "--provider",
-        choices=list(C.HOSTS.keys()),
-        default=None,
-        help="Mail provider shortcut: " + ", ".join(
-            f"{k} ({v})" for k, v in C.HOSTS.items()
-        ),
-    )
-    parser.add_argument(
         "--host",
-        default=None,
-        help="IMAP host (overrides --provider)",
+        default="yahoo",
+        help="IMAP host or shortcut. "
+        "Shortcuts: " + ", ".join(
+            f"{k} ({v})" for k, v in C.HOSTS.items()
+        ) + f". Default: yahoo ({C.HOSTS['yahoo']})",
     )
     parser.add_argument(
         "--port",
@@ -207,9 +202,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
+    # -- host --
+    host: str = C.HOSTS[args.host] if args.host in C.HOSTS else args.host
+
     # -- connect --
     with YahooMailbox(
-        host=args.host,
+        host=host,
         username=args.username,
         password=password,
         port=args.port,
