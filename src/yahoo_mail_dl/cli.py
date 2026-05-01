@@ -11,6 +11,7 @@ from datetime import date
 from pathlib import Path
 
 from . import constants as C
+from .filters import FILTER_FIELDS, FilterSpec
 from .mailbox import YahooMailbox
 
 log = logging.getLogger(__name__)
@@ -133,6 +134,17 @@ def main(argv: list[str] | None = None) -> int:
         help=f"Days per SEARCH window (default: {C.SEARCH_WINDOW_DAYS})",
     )
     parser.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        dest="filters",
+        metavar="FIELD:ADDRESS",
+        help="Client-side address filter (repeatable). "
+        f"Fields: {', '.join(FILTER_FIELDS)}. "
+        "Same field is OR'd, different fields are AND'd. "
+        "Example: --filter sender:mom@aol.com --filter to:me@gmail.com",
+    )
+    parser.add_argument(
         "--list-folders",
         action="store_true",
         help="List folders and exit (do not download)",
@@ -162,6 +174,13 @@ def main(argv: list[str] | None = None) -> int:
             "Error: supply --password or set YAHOO_MAIL_DL_PASSWORD env var",
             file=sys.stderr,
         )
+        return 1
+
+    # -- filters --
+    try:
+        filters = FilterSpec.from_filter_strings(args.filters)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     # -- connect --
@@ -194,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.folders
                 else None,
                 seen=seen,
+                filters=filters,
                 workers=args.workers,
             ):
                 folder_dir = output_dir / _sanitize_filename(folder)
@@ -215,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             log.info("Interrupted after %d messages", count)
 
-    print(f"Downloaded {count} messages to {output_dir.resolve()}")
+    print(f"Downloaded {count} messages to {output_dir}")
     return 0
 
 
