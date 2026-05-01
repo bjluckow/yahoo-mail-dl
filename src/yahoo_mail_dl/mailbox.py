@@ -15,6 +15,7 @@ from typing import Generator
 
 from . import constants as C
 from .connection import IMAPConnection
+from .filters import FilterSpec
 from .search import search_uids
 
 log = logging.getLogger(__name__)
@@ -106,6 +107,7 @@ class YahooMailbox:
         until: date | None = None,
         folders: list[str] | None = None,
         seen: set[str] | None = None,
+        filters: FilterSpec | None = None,
         workers: int = C.DEFAULT_WORKERS,
     ) -> Generator[tuple[str, EmailMessage], None, None]:
         """Yield (folder_name, EmailMessage) for all matching messages.
@@ -116,11 +118,13 @@ class YahooMailbox:
             folders: Folder names to fetch. None = all folders.
             seen: Set of Message-IDs to skip (for resume support).
                   The caller owns persistence of this set.
+            filters: Client-side address filters. None = no filtering.
             workers: Number of concurrent folder-download threads.
                      1 = sequential (default). Max = constants.MAX_WORKERS.
         """
         assert self._conn is not None
         seen = seen or set()
+        filters = filters or FilterSpec()
         workers = max(1, min(workers, C.MAX_WORKERS))
 
         target_folders = folders or self._conn.list_folders()
@@ -129,10 +133,10 @@ class YahooMailbox:
         )
 
         if workers == 1:
-            yield from self._fetch_sequential(target_folders, since, until, seen)
+            yield from self._fetch_sequential(target_folders, since, until, seen, filters)
         else:
             yield from self._fetch_threaded(
-                target_folders, since, until, seen, workers
+                target_folders, since, until, seen, filters, workers
             )
 
     # -- sequential path --
@@ -143,10 +147,11 @@ class YahooMailbox:
         since: date | None,
         until: date | None,
         seen: set[str],
+        filters: FilterSpec,
     ) -> Generator[tuple[str, EmailMessage], None, None]:
         assert self._conn is not None
         for folder in folders:
-            yield from self._fetch_folder(self._conn, folder, since, until, seen)
+            yield from self._fetch_folder(self._conn, folder, since, until, seen, filters)
 
     # -- threaded path --
 
@@ -156,6 +161,7 @@ class YahooMailbox:
         since: date | None,
         until: date | None,
         seen: set[str],
+        filters: FilterSpec,
         workers: int,
     ) -> Generator[tuple[str, EmailMessage], None, None]:
         result_queue: queue.Queue[tuple[str, EmailMessage] | object] = queue.Queue(
@@ -168,7 +174,7 @@ class YahooMailbox:
             conn = self._make_connection()
             try:
                 conn.connect()
-                for item in self._fetch_folder(conn, folder, since, until, seen):
+                for item in self._fetch_folder(conn, folder, since, until, seen, filters):
                     result_queue.put(item)
             except Exception:
                 log.exception("Worker error on folder %r", folder)
@@ -197,6 +203,7 @@ class YahooMailbox:
         since: date | None,
         until: date | None,
         seen: set[str],
+        filters: FilterSpec,
     ) -> Generator[tuple[str, EmailMessage], None, None]:
         """Fetch all messages from a single folder."""
         try:
@@ -242,6 +249,10 @@ class YahooMailbox:
                 message_id = msg.get("Message-ID", "")
                 if message_id in seen:
                     log.debug("Skipping already-seen %s", message_id)
+                    continue
+
+                if not filters.matches(msg):
+                    log.debug("Filtered out %s", message_id)
                     continue
 
                 seen.add(message_id)
