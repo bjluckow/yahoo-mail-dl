@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import mailbox
 import os
 import re
 import sys
@@ -55,6 +56,24 @@ def _build_seen_set(output_dir: Path) -> set[str]:
                     break
         except OSError:
             continue
+
+    return seen
+
+
+def _build_seen_set_mbox(mbox_path: Path) -> set[str]:
+    """Scan an existing .mbox file to build the set of already-downloaded Message-IDs."""
+    seen: set[str] = set()
+    if not mbox_path.exists():
+        return seen
+
+    mb = mailbox.mbox(str(mbox_path))
+    try:
+        for msg in mb:
+            mid = msg.get("Message-ID", "")
+            if mid:
+                seen.add(mid)
+    finally:
+        mb.close()
 
     return seen
 
@@ -145,6 +164,11 @@ def main(argv: list[str] | None = None) -> int:
         "Example: --filter sender:mom@aol.com --filter to:me@gmail.com",
     )
     parser.add_argument(
+        "--mbox",
+        action="store_true",
+        help="Write all messages to a single .mbox file instead of individual .eml files",
+    )
+    parser.add_argument(
         "--list-folders",
         action="store_true",
         help="List folders and exit (do not download)",
@@ -200,37 +224,60 @@ def main(argv: list[str] | None = None) -> int:
 
         # -- download mode --
         output_dir: Path = args.output
-        seen = _build_seen_set(output_dir)
-        if seen:
-            log.info("Resuming: %d messages already downloaded", len(seen))
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        fetch_kwargs = dict(
+            since=args.since,
+            until=args.until,
+            folders=[f.strip() for f in args.folders.split(",")]
+            if args.folders
+            else None,
+            filters=filters,
+            workers=args.workers,
+        )
 
         count = 0
         try:
-            for folder, msg in mb.fetch(
-                since=args.since,
-                until=args.until,
-                folders=[f.strip() for f in args.folders.split(",")]
-                if args.folders
-                else None,
-                seen=seen,
-                filters=filters,
-                workers=args.workers,
-            ):
-                folder_dir = output_dir / _sanitize_filename(folder)
-                folder_dir.mkdir(parents=True, exist_ok=True)
+            if args.mbox:
+                mbox_path = output_dir / "archive.mbox"
+                seen = _build_seen_set_mbox(mbox_path)
+                if seen:
+                    log.info("Resuming: %d messages already in mbox", len(seen))
 
-                message_id = msg.get("Message-ID", f"no-id-{count}")
-                filename = _sanitize_filename(message_id) + ".eml"
-                filepath = folder_dir / filename
+                mbox_file = mailbox.mbox(str(mbox_path))
+                mbox_file.lock()
+                try:
+                    for folder, msg in mb.fetch(seen=seen, **fetch_kwargs):
+                        msg["X-Folder"] = folder
+                        mbox_file.add(msg)
+                        count += 1
 
-                if filepath.exists():
-                    continue
+                        if count % 100 == 0:
+                            log.info("Downloaded %d messages so far...", count)
+                finally:
+                    mbox_file.unlock()
+                    mbox_file.close()
+            else:
+                seen = _build_seen_set(output_dir)
+                if seen:
+                    log.info("Resuming: %d messages already downloaded", len(seen))
 
-                filepath.write_bytes(msg.as_bytes())
-                count += 1
+                for folder, msg in mb.fetch(seen=seen, **fetch_kwargs):
+                    folder_dir = output_dir / _sanitize_filename(folder)
+                    folder_dir.mkdir(parents=True, exist_ok=True)
 
-                if count % 100 == 0:
-                    log.info("Downloaded %d messages so far...", count)
+                    message_id = msg.get("Message-ID", f"no-id-{count}")
+                    filename = _sanitize_filename(message_id) + ".eml"
+                    filepath = folder_dir / filename
+
+                    if filepath.exists():
+                        continue
+
+                    filepath.write_bytes(msg.as_bytes())
+                    count += 1
+
+                    if count % 100 == 0:
+                        log.info("Downloaded %d messages so far...", count)
 
         except KeyboardInterrupt:
             log.info("Interrupted after %d messages", count)

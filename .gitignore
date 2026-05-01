@@ -1,6 +1,8 @@
 # Custom
 dev/
 yahoo-mail-dl-output/
+*.eml
+*.mbox
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
