@@ -7,7 +7,7 @@ Yahoo and AOL IMAP servers enforce non-standard restrictions (500-message search
 ## Install
 
 ```bash
-pip install yahoo-mail-dl
+pip install git+https://github.com/bjluckow/yahoo-mail-dl.git
 ```
 
 ## CLI Usage
